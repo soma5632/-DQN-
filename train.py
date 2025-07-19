@@ -2,10 +2,9 @@ import os
 import argparse
 import numpy as np
 from tqdm import trange
-
 import torch
 
-from osero_for_Q import OthelloEnv, Disc
+from othello_env import OthelloEnv, Disc
 from dqn import DQNAgent, DEVICE
 
 def parse_args():
@@ -56,25 +55,47 @@ def main():
             state_tensor = torch.tensor(state, dtype=torch.float32, device=DEVICE)
 
             # 2) 環境の合法手(11～88) → 8×8フラット idx のリスト
-            legal_env = env.legal_actions()        # 例: [11, 22, 33, …]
+            legal_env = env.legal_actions()
             legal_idx = [pos_to_index(p) for p in legal_env]
 
             # 3) エージェントは0–63の idx を返す
             action_idx = agent.select_action(state_tensor, legal_idx)
 
-            # 4) flatted idx → 環境用 idx（11–88） に変換
+            # 4) 8×8 idx → 環境用 idx（11–88） に変換して実行
             action_env = index_to_pos(action_idx)
-            next_state, reward, done, _ = env.step(action_env)
+            next_state, _, done, _ = env.step(action_env)
 
-            # 5) Experience を格納＆モデル更新
-            next_tensor = torch.tensor(next_state,
-                                       dtype=torch.float32,
-                                       device=DEVICE)
-            agent.store_transition(state_tensor,
-                                   action_idx,   # ← 0–63 の idx
-                                   reward,
-                                   next_tensor,
-                                   done)
+            # ─── 報酬シェーピング ───
+            my_disc = env.agent_disc
+            opp_disc = Disc.OPPOSITE[my_disc]
+
+            # 石差（正規化）
+            b = env.board.count(my_disc)
+            w = env.board.count(opp_disc)
+
+            # コーナー取得ボーナス
+            corners = [11, 18, 81, 88]
+            my_corners  = sum(env.board.discs[c] == my_disc  for c in corners)
+            opp_corners = sum(env.board.discs[c] == opp_disc for c in corners)
+
+            # モビリティ差
+            mobility_diff = len(env.legal_actions()) - len(env.legal_actions_opp())
+
+            # 合成報酬
+            reward = (b - w) / 64.0 \
+                   + 0.5 * (my_corners - opp_corners) \
+                   + 0.1 * mobility_diff
+            # ───────────────────────
+
+            # 学習用に格納＆更新
+            next_tensor = torch.tensor(next_state, dtype=torch.float32, device=DEVICE)
+            agent.store_transition(
+                state_tensor,
+                action_idx,   # 0–63 の idx
+                reward,
+                next_tensor,
+                done
+            )
             agent.update()
 
             state = next_state
