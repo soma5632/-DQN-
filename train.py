@@ -1,15 +1,18 @@
+# train.py
+
 import os
 import argparse
 import numpy as np
 from tqdm import trange
 import torch
+import random
 
 from osero_for_Q import OthelloEnv, Disc
 from dqn import DQNAgent, DEVICE
 
 def parse_args():
     parser = argparse.ArgumentParser("Othello DQN Training")
-    parser.add_argument("--episodes", type=int, default=10000,
+    parser.add_argument("--episodes", type=int, default=20000,
                         help="総エピソード数")
     parser.add_argument("--save-dir", type=str, default="checkpoints",
                         help="チェックポイント保存ディレクトリ")
@@ -35,7 +38,6 @@ def main():
     args = parse_args()
     os.makedirs(args.save_dir, exist_ok=True)
 
-    # 環境＆エージェント初期化
     env = OthelloEnv(agent_disc=Disc.BLACK)
     agent = DQNAgent(n_actions=64)
     if args.load:
@@ -51,61 +53,62 @@ def main():
         ep_reward = 0.0
 
         while not done:
-            # 1) state → tensor
+            # 現状態テンソル化
             state_tensor = torch.tensor(state, dtype=torch.float32, device=DEVICE)
 
-            # 2) 環境の合法手(11～88) → 8×8フラット idx のリスト
+            # 合法手リスト（10×10表記）
             legal_env = env.legal_actions()
-            legal_idx = [pos_to_index(p) for p in legal_env]
 
-            # 3) エージェントは0–63の idx を返す
-            action_idx = agent.select_action(state_tensor, legal_idx)
+            if not legal_env:
+                # ── パス処理 ──
+                next_state, reward, done, _ = env.step(None)
+            else:
+                # ① 環境idx → フラット idx
+                legal_idx = [pos_to_index(p) for p in legal_env]
 
-            # 4) 8×8 idx → 環境用 idx（11–88） に変換して実行
-            action_env = index_to_pos(action_idx)
-            next_state, _, done, _ = env.step(action_env)
+                # ② DQN が0–63の中から選択
+                action_idx = agent.select_action(state_tensor, legal_idx)
 
-            # ─── 報酬シェーピング ───
-            my_disc = env.agent_disc
-            opp_disc = Disc.OPPOSITE[my_disc]
+                # ③ フラット idx → 環境idx に戻す
+                action_env = index_to_pos(action_idx)
+                next_state, _, done, _ = env.step(action_env)
 
-            # 石差（正規化）
-            b = env.board.count(my_disc)
-            w = env.board.count(opp_disc)
+                # ── 報酬シェーピング ──
+                my_disc  = env.agent_disc
+                opp_disc = Disc.OPPOSITE[my_disc]
+                b = env.board.count(my_disc)
+                w = env.board.count(opp_disc)
 
-            # コーナー取得ボーナス
-            corners = [11, 18, 81, 88]
-            my_corners  = sum(env.board.discs[c] == my_disc  for c in corners)
-            opp_corners = sum(env.board.discs[c] == opp_disc for c in corners)
+                corners = [11, 18, 81, 88]
+                my_corners  = sum(env.board.discs[c] == my_disc  for c in corners)
+                opp_corners = sum(env.board.discs[c] == opp_disc for c in corners)
 
-            # モビリティ差
-            mobility_diff = len(env.legal_actions()) - len(env.legal_actions_opp())
+                mobility_diff = len(env.legal_actions()) - len(env.legal_actions_opp())
 
-            # 合成報酬
-            reward = (b - w) / 64.0 \
-                   + 0.5 * (my_corners - opp_corners) \
-                   + 0.1 * mobility_diff
-            # ───────────────────────
+                reward = (b - w) / 64.0 \
+                       + 0.5 * (my_corners - opp_corners) \
+                       + 0.1 * mobility_diff
 
-            # 学習用に格納＆更新
-            next_tensor = torch.tensor(next_state, dtype=torch.float32, device=DEVICE)
-            agent.store_transition(
-                state_tensor,
-                action_idx,   # 0–63 の idx
-                reward,
-                next_tensor,
-                done
-            )
-            agent.update()
+                # 経験リプレイ用に記憶
+                next_tensor = torch.tensor(next_state, dtype=torch.float32, device=DEVICE)
+                agent.store_transition(
+                    state_tensor,
+                    action_idx,
+                    reward,
+                    next_tensor,
+                    done
+                )
+                agent.update()
+
+                ep_reward += reward
 
             state = next_state
-            ep_reward += reward
 
         episode_rewards.append(ep_reward)
         if ep_reward > 0:
             win_count += 1
 
-        # 定期ログ出力
+        # ログ表示
         if ep % args.log_interval == 0:
             recent = episode_rewards[-args.log_interval:]
             avg_reward = np.mean(recent)
@@ -113,7 +116,7 @@ def main():
             print(f"[Episode {ep:5d}]  AvgReward: {avg_reward:.2f}  WinRate: {win_rate:.2f}")
             win_count = 0
 
-        # 定期モデル保存
+        # モデル保存
         if ep % args.save_interval == 0:
             path = os.path.join(args.save_dir, f"dqn_ep{ep}.pth")
             agent.save(path)
