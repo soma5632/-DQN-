@@ -4,7 +4,7 @@ import numpy as np
 from tqdm import trange
 import torch
 
-from othello_env import OthelloEnv, Disc
+from osero_for_Q import OthelloEnv, Disc
 from dqn import DQNAgent, DEVICE
 
 def parse_args():
