@@ -154,6 +154,13 @@ class OthelloEnv:
     def render(self):
         self.board.show()
 
+    def legal_actions(self):
+        return self.board.putable_places(self.current_player)
+
+    def legal_actions_opp(self):
+        """対戦相手の合法手リストを返す"""
+        return self.board.putable_places(self.opponent)
+
 # 動作テスト
 if __name__ == "__main__":
     env = OthelloEnv(agent_disc=Disc.BLACK)
