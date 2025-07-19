@@ -1,5 +1,3 @@
-# train.py
-
 import os
 import argparse
 import numpy as np
@@ -60,20 +58,27 @@ def main():
             legal_env = env.legal_actions()
 
             if not legal_env:
-                # ── パス処理 ──
-                next_state, reward, done, _ = env.step(None)
+                # パス
+                next_state, _, done, _ = env.step(None)
+                reward = 0.0  # パス時は報酬なし
             else:
-                # ① 環境idx → フラット idx
+                # 1) 環境idx → フラット idx
                 legal_idx = [pos_to_index(p) for p in legal_env]
 
-                # ② DQN が0–63の中から選択
+                # 2) DQN が 0–63 の中から選択
                 action_idx = agent.select_action(state_tensor, legal_idx)
 
-                # ③ フラット idx → 環境idx に戻す
+                # 3) フラット idx → 環境idx に戻す
                 action_env = index_to_pos(action_idx)
+
+                # フォールバック：もし action_env が合法手リストにない場合はランダム選択
+                if action_env not in legal_env:
+                    action_env = random.choice(legal_env)
+
+                # 実際に盤面を進める
                 next_state, _, done, _ = env.step(action_env)
 
-                # ── 報酬シェーピング ──
+                # ─── 報酬シェーピング ───
                 my_disc  = env.agent_disc
                 opp_disc = Disc.OPPOSITE[my_disc]
                 b = env.board.count(my_disc)
@@ -88,8 +93,9 @@ def main():
                 reward = (b - w) / 64.0 \
                        + 0.5 * (my_corners - opp_corners) \
                        + 0.1 * mobility_diff
+                # ───────────────────────
 
-                # 経験リプレイ用に記憶
+                # 経験リプレイ用に記憶＆学習
                 next_tensor = torch.tensor(next_state, dtype=torch.float32, device=DEVICE)
                 agent.store_transition(
                     state_tensor,
@@ -99,7 +105,6 @@ def main():
                     done
                 )
                 agent.update()
-
                 ep_reward += reward
 
             state = next_state
@@ -108,7 +113,7 @@ def main():
         if ep_reward > 0:
             win_count += 1
 
-        # ログ表示
+        # 定期ログ出力
         if ep % args.log_interval == 0:
             recent = episode_rewards[-args.log_interval:]
             avg_reward = np.mean(recent)
@@ -116,7 +121,7 @@ def main():
             print(f"[Episode {ep:5d}]  AvgReward: {avg_reward:.2f}  WinRate: {win_rate:.2f}")
             win_count = 0
 
-        # モデル保存
+        # 定期モデル保存
         if ep % args.save_interval == 0:
             path = os.path.join(args.save_dir, f"dqn_ep{ep}.pth")
             agent.save(path)
